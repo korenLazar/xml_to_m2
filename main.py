@@ -1,70 +1,81 @@
 import re
+from bs4.element import Tag
 from bs4 import BeautifulSoup as bs
+from os.path import splitext
 
 QUOT_ENCODING = "&quot;"
 
-XML_FILE_PATH = "Oceania_level_12.xml"
+XML_FILE_PATH = "short_xml.xml"
 
-# original_sentences = list()
+with open(XML_FILE_PATH, "r") as f_read:
+    with open(f'{splitext(XML_FILE_PATH)[0]}.m2', 'w') as f_write:
+        content = f_read.readlines()
+        content = "".join(content)
+        soup = bs(content, "lxml")
+        writings = soup.find_all("writing")
+        for writing in writings:
+            texts = writing.find("text").contents
+            sentences = writing.find_all("sentence")
 
-with open(XML_FILE_PATH, "r") as f:
-    content = f.readlines()
-    content = "".join(content)
-    soup = bs(content, "lxml")
-    writings = soup.find_all("writing")
-    for i in range(len(writings)):  # TODO: change back to writing in writings?
-        if not writings[i].find_all("change"):  # If the writing is not corrected
-            continue
-        texts = writings[i].find("text").contents
-        sentences = writings[i].find_all("sentence")
-        # cur_original_sents = list()  # TODO: no need?
-        errors_indices, correct_phrases = list(), list()
+            sent_errors_indices, sent_correct_phrases, sent_correct_symbols = list(), list(), list()
+            cur_token_id, cur_sent_id = 0, 0
+            tokens = sentences[cur_sent_id].find_all("token")
 
-        cur_token_id, cur_sent_id = 0, 0
-        tokens = sentences[cur_sent_id].find_all("token")
-        for text in texts:
-            is_correction = not isinstance(text, str)
-            if is_correction:
-                first_token_id = cur_token_id
-            phrase = text.find("selection").text.strip() if is_correction else text.strip()
+            for text in texts:
+                is_correction = isinstance(text, Tag)
 
-            while phrase:
-                if phrase.startswith(tokens[cur_token_id].text):
-                    phrase = phrase[len(tokens[cur_token_id].text):].strip()
-                    cur_token_id += 1
-
-                elif phrase.startswith(QUOT_ENCODING) and tokens[cur_token_id].text in ['``',
-                                                                                        '\'\'']:  # Case of different encoding in the phrase
-                    phrase = phrase[len(QUOT_ENCODING):].strip()
-                    cur_token_id += 1
-
-                elif tokens[cur_token_id].text.startswith("."):  # Case of ".<word>" token
-                    phrase = phrase[len("."):].strip()
-                    tokens[cur_token_id].string = tokens[cur_token_id].text[len("."):]
-
+                if is_correction:
+                    first_token_id = cur_token_id
+                    incorrect_phrase_tag = text.find("selection")
+                    try:
+                        phrase = incorrect_phrase_tag.text.strip()
+                    except:
+                        continue
                 else:
-                    # If tokenization started from the middle of the phrase
-                    if tokens[cur_token_id].text in phrase and tokens[cur_token_id + 1].text in phrase:
-                        new_index = re.search(rf'\b({tokens[cur_token_id].text})\b', phrase)
-                        phrase = phrase[new_index.start():]
+                    phrase = text.strip() if isinstance(text, str) else None
+                while phrase:
+                    if phrase.startswith(tokens[cur_token_id].text):
+                        phrase = phrase[len(tokens[cur_token_id].text):].strip()
+                        cur_token_id += 1
+
+                    # Case of different encoding in the phrase vs the text
+                    elif phrase.startswith(QUOT_ENCODING) and tokens[cur_token_id].text in ['``', '\'\'']:
+                        phrase = phrase[len(QUOT_ENCODING):].strip()
+                        cur_token_id += 1
+
+                    # Case of ".<word>" token
+                    elif tokens[cur_token_id].text.startswith("."):
+                        phrase = phrase[len("."):].strip()
+                        tokens[cur_token_id].string = tokens[cur_token_id].text[len("."):]
 
                     else:
-                        print(
-                            f"In writing_id={writings[i].attrs['id']} sentence_id={sentences[cur_sent_id].attrs['id']} "
-                            f"token_id={tokens[cur_token_id].attrs['id']}")
-                        break  # Move to the next text
+                        # If tokenization started from the middle of the phrase
+                        if tokens[cur_token_id].text in phrase and tokens[cur_token_id + 1].text in phrase:
+                            new_index = re.search(rf'\b({tokens[cur_token_id].text})\b', phrase)
+                            phrase = phrase[new_index.start():]
 
-                if cur_token_id >= len(tokens):
-                    if cur_sent_id + 1 < len(sentences):
-                        cur_sent_id += 1
-                        tokens, cur_token_id = sentences[cur_sent_id].find_all("token"), 0
-            if is_correction:
-                # error_symbol = text.find("symbol").text  # TODO: no need?
-                correct_phrases.append(text.find("correct").text.strip())
-                errors_indices.append((first_token_id + 1, max(first_token_id + 1, cur_token_id)))
+                        else:
+                            # print(
+                            #     f"In writing_id={writing.attrs['id']} sentence_id={sentences[cur_sent_id].attrs['id']}"
+                            #     f" token_id={tokens[cur_token_id].attrs['id']}")
+                            break  # Move to the next text
 
-        # TODO: delete next two lines?
-        # cur_original_sents.append((" ".join([token.text for token in tokens]), int(sentence.attrs["tokencount"])))
-        # original_sentences.append(cur_original_sents)
-        print(errors_indices)
-        print(correct_phrases)
+                    if cur_token_id >= len(tokens):
+
+                        original_sentence = " ".join([token.text for token in tokens])
+                        f_write.write(f"S {original_sentence}\n")
+                        for j in range(len(sent_errors_indices)):
+                            f_write.write(
+                                f"A {sent_errors_indices[j]}|||{sent_correct_symbols[j]}|||{sent_correct_phrases[j]}|||REQUIRED|||-NONE-|||0\n")
+                        f_write.write('\n')
+
+                        sent_correct_phrases, sent_correct_symbols, sent_errors_indices = list(), list(), list()
+
+                        if cur_sent_id + 1 < len(sentences):
+                            cur_sent_id += 1
+                            tokens, cur_token_id = sentences[cur_sent_id].find_all("token"), 0
+
+                if is_correction:
+                    sent_correct_symbols.append(text.find("symbol").text)
+                    sent_correct_phrases.append(text.find("correct").text.strip())
+                    sent_errors_indices.append((first_token_id, max(first_token_id, cur_token_id)))
